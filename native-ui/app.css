@@ -1,0 +1,65 @@
+body.native-mode {
+    background: var(--paper);
+}
+.native-mode .prototype-bar,
+.native-mode .below-app,
+.native-mode .technical-note {
+    display: none;
+}
+.native-mode .app {
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    min-height: 0;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+.native-mode .traffic {
+    visibility: hidden;
+}
+.native-mode .app-footer {
+    flex-shrink: 0;
+}
+.native-mode .toolbar {
+    flex-shrink: 0;
+    -webkit-app-region: drag;
+}
+.native-mode .workspace {
+    min-height: 0;
+}
+.native-mode .workspace > main {
+    overflow: auto;
+    min-height: 0;
+    flex: 1;
+}
+.native-loading .workspace {
+    visibility: hidden;
+}
+.native-loading:after {
+    content: "正在读取这台 Mac 的风扇和温度…";
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--muted);
+    background: var(--paper);
+    z-index: 100;
+}
+.native-mode .preview-panel {
+    display: block;
+}
+@media (max-width: 1050px) {
+    .native-mode .control-layout {
+        grid-template-columns: 1fr;
+    }
+    .native-mode .preview-panel {
+        border-top: 1px solid var(--line);
+        padding-top: 18px;
+    }
+}
+
+.native-loading[data-load-error]:after {
+    content: attr(data-load-error);
+}

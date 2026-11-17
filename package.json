@@ -1,0 +1,26 @@
+{
+    "name": "better-macs-fan-control",
+    "version": "0.1.0-alpha.1",
+    "private": true,
+    "description": "Better Fan user interface and reproducible browser checks",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/Changan-Su/better-macs-fan-control.git"
+    },
+    "engines": {
+        "node": ">=22"
+    },
+    "scripts": {
+        "format": "prettier --write ui-demo/index.html native-ui browser-tests scripts/*.mjs playwright.config.mjs package.json .github/workflows",
+        "format:check": "prettier --check ui-demo/index.html native-ui browser-tests scripts/*.mjs playwright.config.mjs package.json .github/workflows",
+        "test": "playwright test",
+        "preview": "node scripts/serve.mjs",
+        "build:ui": "node scripts/build-ui.mjs",
+        "build:mac": "bash scripts/build-macos.sh",
+        "package:mac": "bash scripts/package-macos.sh"
+    },
+    "devDependencies": {
+        "@playwright/test": "1.65.1",
+        "prettier": "3.10.1"
+    }
+}

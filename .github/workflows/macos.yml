@@ -1,0 +1,150 @@
+name: Better Fan macOS
+
+on:
+    pull_request:
+        branches: [master]
+    push:
+        branches: [master]
+        tags: ["v[0-9]*"]
+
+permissions:
+    contents: read
+
+jobs:
+    interface:
+        name: Browser checks
+        runs-on: ubuntu-24.04
+        timeout-minutes: 12
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+            - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+              with:
+                  node-version: "22"
+                  cache: npm
+            - run: npm ci
+            - run: npm run format:check
+            - run: npx playwright install --with-deps chromium webkit
+            - run: npm test
+
+    macos:
+        name: Build and package (${{ matrix.arch }})
+        runs-on: macos-15
+        timeout-minutes: 30
+        strategy:
+            fail-fast: false
+            matrix:
+                arch: [arm64, x86_64]
+        steps:
+            - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+            - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+              with:
+                  node-version: "22"
+            - name: Verify release source and version
+              if: github.ref_type == 'tag'
+              env:
+                  TAG: ${{ github.ref_name }}
+              run: |
+                  set -euo pipefail
+                  version="$(node -p "require('./package.json').version")"
+                  [[ "$TAG" == "v$version" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]
+                  git merge-base --is-ancestor HEAD origin/master
+                  echo "APP_VERSION=$version" >> "$GITHUB_ENV"
+                  echo "BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+            - name: Exercise fan control using a fake driver
+              if: matrix.arch == 'arm64'
+              run: swift test
+            - name: Prepare Developer ID signing
+              if: github.ref_type == 'tag'
+              env:
+                  APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+                  APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+                  APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+                  APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+                  APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+              run: bash scripts/configure-signing.sh
+            - name: Build app bundle
+              run: bash scripts/build-macos.sh ${{ matrix.arch }}
+            - name: Verify bundled interface on runner architecture
+              if: matrix.arch == 'arm64'
+              run: |
+                  if [[ "$(uname -m)" == arm64 ]]; then
+                      'dist/macos-arm64/Better Fan.app/Contents/MacOS/BetterFan' --smoke-test
+                  fi
+            - name: Notarize and staple application
+              if: github.ref_type == 'tag' && env.SIGNED_BUILD == 'true'
+              env:
+                  APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+                  APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+              run: bash scripts/notarize-app.sh ${{ matrix.arch }}
+            - name: Build and verify DMG and ZIP
+              run: |
+                  bash scripts/package-macos.sh ${{ matrix.arch }}
+                  hdiutil verify dist/packages/*.dmg
+                  unzip -tq dist/packages/*.zip
+                  (cd dist/packages && shasum -a 256 -c *.sha256)
+            - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+              with:
+                  name: better-fan-${{ matrix.arch }}
+                  path: dist/packages/*
+                  if-no-files-found: error
+                  retention-days: 14
+            - name: Remove temporary signing material
+              if: always() && github.ref_type == 'tag'
+              run: |
+                  work="$RUNNER_TEMP/betterfan-signing"
+                  if [[ -f "$work/codesign.keychain-db" ]]; then
+                      security delete-keychain "$work/codesign.keychain-db"
+                  fi
+                  rm -rf "$work"
+
+    release:
+        name: Publish GitHub Release
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        needs: [interface, macos]
+        runs-on: ubuntu-24.04
+        timeout-minutes: 5
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+              with:
+                  pattern: better-fan-*
+                  merge-multiple: true
+                  path: packages
+            - name: Publish verified packages
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  GH_REPO: ${{ github.repository }}
+                  TAG: ${{ github.ref_name }}
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  cd packages
+                  shopt -s nullglob
+                  checksums=(*.sha256)
+                  [[ "${#checksums[@]}" == 2 ]]
+                  for checksum in "${checksums[@]}"; do sha256sum -c "$checksum"; done
+                  unsigned=(*-unsigned-monitor.dmg)
+                  args=()
+                  if [[ ${#unsigned[@]} == 2 ]]; then
+                    args+=(--prerelease)
+                    cat > "$RUNNER_TEMP/release.md" <<'NOTES'
+                  Better Fan macOS 监测预览。下载与处理器对应的 DMG，拖入“应用程序”后打开。需要 macOS 13 或更高版本。
+
+                  可读取真实风扇转速和温度。此构建使用临时签名，未经过 Apple 公证。风扇调速需要 Developer ID 签名、后台服务授权和实机验收。
+                  NOTES
+                  elif [[ ${#unsigned[@]} == 0 ]]; then
+                    [[ "$TAG" != *-* ]] || args+=(--prerelease)
+                    cat > "$RUNNER_TEMP/release.md" <<'NOTES'
+                  Better Fan macOS。下载与处理器对应的 DMG，拖入“应用程序”后打开。需要 macOS 13 或更高版本。
+
+                  应用已使用 Developer ID 签名并通过 Apple 公证。调速需要在总览中启用辅助服务，并在系统设置中授权。可用控制取决于机型及固件。
+                  NOTES
+                  else
+                    echo '::error::The two architectures must use the same signing mode.'
+                    exit 1
+                  fi
+                  gh release create "$TAG" --verify-tag --title "Better Fan $TAG" --notes-file "$RUNNER_TEMP/release.md" "${args[@]}" -- *.dmg *.zip *.sha256
